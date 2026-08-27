@@ -1,0 +1,33 @@
+name: Build SW Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Pobierz projekt
+        uses: actions/checkout@v4
+
+      - name: Ustaw Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Nadaj uprawnienia Gradle
+        run: chmod +x gradlew
+
+      - name: Zbuduj APK
+        run: ./gradlew assembleDebug
+
+      - name: Udostępnij APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SW-Android-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
