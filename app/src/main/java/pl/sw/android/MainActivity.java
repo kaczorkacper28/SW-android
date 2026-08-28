@@ -5,8 +5,11 @@ import android.os.Bundle;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
+import android.view.inputmethod.InputMethodManager;
+import android.content.Context;
 import android.widget.*;
 import java.io.*;
 import java.net.*;
@@ -51,13 +54,14 @@ public class MainActivity extends Activity {
 
     private void frame(String title) {
         ScrollView sv = new ScrollView(this);
+        sv.setFillViewport(true);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(10), dp(10), dp(10), dp(18));
         root.setBackgroundColor(Color.WHITE);
         sv.addView(root);
         setContentView(sv);
-
+    
         TextView brand = text("BLUEBIRD\nSŁUŻBA WIĘZIENNA", 18, Color.rgb(35,35,35), true);
         brand.setBackground(bg(Color.rgb(242,242,242), 2));
         brand.setGravity(Gravity.CENTER_VERTICAL);
@@ -116,7 +120,6 @@ public class MainActivity extends Activity {
 
     private void home() {
         frame("CENTRUM OPERACYJNE");
-
         root.addView(bar("SŁUŻBA WIĘZIENNA • SYSTEM BLUEBIRD SW", GREEN));
         root.addView(bar("Status połączenia: ONLINE", Color.rgb(20, 190, 80)));
         root.addView(bar("Wybierz moduł operacyjny", PINK));
@@ -189,7 +192,6 @@ public class MainActivity extends Activity {
     private String realRank(JSONObject m) {
         String r = first(m, "rank", "stopien", "position", "stanowisko", "grade", "ranga", "roleName", "role");
         if (!r.isEmpty() && !r.equalsIgnoreCase("obywatel")) return r;
-
         JSONArray roles = m.optJSONArray("roles");
         if (roles != null) {
             for (int i = 0; i < roles.length(); i++) {
@@ -239,17 +241,14 @@ public class MainActivity extends Activity {
                 while ((line = r.readLine()) != null) z.append(line);
                 r.close();
                 if (code < 200 || code >= 300) throw new Exception("HTTP " + code + ": " + z);
-
                 JSONObject response = new JSONObject(z.toString());
                 JSONArray source = getOfficerArray(response);
                 if (source == null) throw new Exception("API nie zwróciło tablicy funkcjonariuszy.");
-
                 ArrayList<JSONObject> officers = new ArrayList<>();
                 for (int i = 0; i < source.length(); i++) {
                     JSONObject m = source.optJSONObject(i);
                     if (m != null && !isCitizen(m)) officers.add(m);
                 }
-
                 runOnUiThread(() -> {
                     status.setText("KADRA SW • " + officers.size() + " FUNKCJONARIUSZY");
                     for (JSONObject m : officers) addOfficerCard(m);
@@ -267,14 +266,12 @@ public class MainActivity extends Activity {
         String id = first(m, "id", "discordId", "userId", "numer", "number");
         String status = first(m, "status", "dutyStatus", "state");
         if (status.isEmpty()) status = "Aktywny";
-
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(8), dp(8), dp(8), dp(8));
         card.setBackground(bg(PANEL, 2));
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
         cp.setMargins(0, dp(5), 0, 0);
-
         TextView n = text("👮 " + name, 15, Color.rgb(20,20,20), true);
         TextView q = text("STOPIEŃ / STANOWISKO: " + rank, 13, Color.rgb(20,80,45), true);
         TextView x = text("ID: " + (id.isEmpty() ? "-" : id) + "    •    STATUS: " + status, 11, Color.DKGRAY, false);
@@ -288,10 +285,22 @@ public class MainActivity extends Activity {
         EditText e = new EditText(this);
         e.setHint(hint);
         e.setHintTextColor(Color.GRAY);
-        e.setTextColor(Color.DKGRAY);
+        e.setTextColor(Color.BLACK);
         e.setTextSize(14);
-        e.setBackground(bg(PANEL, 2));
-        e.setPadding(dp(10), dp(5), dp(10), dp(5));
+        e.setSingleLine(false);
+        e.setFocusable(true);
+        e.setFocusableInTouchMode(true);
+        e.setClickable(true);
+        e.setLongClickable(true);
+        e.setCursorVisible(true);
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        e.setBackground(bg(Color.rgb(245,245,245), 6));
+        e.setPadding(dp(12), dp(10), dp(12), dp(10));
+        e.setOnClickListener(v -> {
+            e.requestFocus();
+            InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(e, InputMethodManager.SHOW_IMPLICIT);
+        });
         return e;
     }
 
@@ -301,15 +310,18 @@ public class MainActivity extends Activity {
         EditText title = input("Tytuł komunikatu");
         EditText message = input("Treść komunikatu");
         EditText channel = input("ID kanału Discord");
-        root.addView(title, new LinearLayout.LayoutParams(-1, dp(55)));
-        root.addView(message, new LinearLayout.LayoutParams(-1, dp(90)));
-        root.addView(channel, new LinearLayout.LayoutParams(-1, dp(55)));
+        title.setSingleLine(true);
+        channel.setSingleLine(true);
+        message.setMinLines(4);
+        message.setGravity(Gravity.TOP | Gravity.START);
+        root.addView(title, new LinearLayout.LayoutParams(-1, dp(58)));
+        root.addView(message, new LinearLayout.LayoutParams(-1, dp(120)));
+        root.addView(channel, new LinearLayout.LayoutParams(-1, dp(58)));
         Button send = tile("WYŚLIJ KOMUNIKAT", "Broadcaster SW", PINK);
         root.addView(send, new LinearLayout.LayoutParams(-1, dp(85)));
         TextView out = text("", 13, Color.DKGRAY, true);
         root.addView(out);
         back();
-
         send.setOnClickListener(v -> {
             if (message.getText().toString().trim().isEmpty() || channel.getText().toString().trim().isEmpty()) {
                 out.setText("Uzupełnij treść i ID kanału.");
