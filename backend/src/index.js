@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { sendBroadcast, listChannels } = require('./broadcaster');
+const { sendBroadcast, listChannels, listMessages, sendMessage } = require('./broadcaster');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -103,7 +103,6 @@ function hasAnyNonCitizenRole(roleNames) {
   });
 }
 
-// Role techniczne/organizacyjne nie są stopniem funkcjonariusza.
 function isTechnicalRole(name) {
   const r = normalizeRoleName(name);
   if (!r || r === '@everyone') return true;
@@ -115,8 +114,6 @@ function isTechnicalRole(name) {
   return technical.some(x => r === x || r.startsWith(x + ' ') || r.endsWith(' ' + x));
 }
 
-// Gdy rola nie ma nazwy odpowiadającej wpisanej liście stopni,
-// pokazujemy rzeczywistą rolę SW z Discorda zamiast "Brak stopnia".
 function getActualSwRole(roleObjects, rank) {
   if (rank) return rank;
   const candidates = roleObjects
@@ -135,7 +132,32 @@ app.get('/api/config', (req, res) => res.json({ guildId: GUILD_ID, clientId: CLI
 app.get('/api/discord/channels', async (req, res) => {
   try {
     const channels = await listChannels(GUILD_ID);
-    res.json(channels.filter(c => c.type === 0 || c.type === 5).map(c => ({ id: c.id, name: c.name, type: c.type })));
+    res.json(channels
+      .filter(c => c.type === 0 || c.type === 5)
+      .map(c => ({ id: c.id, name: c.name, type: c.type, parentId: c.parent_id || null, position: c.position || 0 })));
+  } catch (error) {
+    res.status(error.status || 500).json(discordError(error.status || 500, error.details));
+  }
+});
+
+app.get('/api/discord/messages', async (req, res) => {
+  try {
+    const channelId = String(req.query.channelId || '').trim();
+    if (!channelId) return res.status(400).json({ error: 'CHANNEL_ID_REQUIRED', message: 'Podaj channelId.' });
+    const messages = await listMessages(channelId, req.query.limit);
+    res.json({ channelId, messages });
+  } catch (error) {
+    res.status(error.status || 500).json(discordError(error.status || 500, error.details));
+  }
+});
+
+app.post('/api/discord/messages', async (req, res) => {
+  try {
+    const channelId = String(req.body?.channelId || '').trim();
+    const content = String(req.body?.content || '').trim();
+    if (!channelId || !content) return res.status(400).json({ error: 'CHANNEL_ID_AND_CONTENT_REQUIRED', message: 'Kanał i treść wiadomości są wymagane.' });
+    const message = await sendMessage(channelId, content);
+    res.status(201).json({ success: true, message });
   } catch (error) {
     res.status(error.status || 500).json(discordError(error.status || 500, error.details));
   }
