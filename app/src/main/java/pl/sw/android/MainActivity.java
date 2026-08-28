@@ -61,7 +61,7 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.WHITE);
         sv.addView(root);
         setContentView(sv);
-    
+
         TextView brand = text("BLUEBIRD\nSŁUŻBA WIĘZIENNA", 18, Color.rgb(35,35,35), true);
         brand.setBackground(bg(Color.rgb(242,242,242), 2));
         brand.setGravity(Gravity.CENTER_VERTICAL);
@@ -161,20 +161,27 @@ public class MainActivity extends Activity {
         back();
     }
 
+    // Obywatel jest wykluczany wyłącznie na podstawie nazwy roli Discord.
+    // Nie sprawdzamy nicku, nazwy użytkownika, statusu ani innych pól.
     private boolean isCitizen(JSONObject m) {
-        String[] fields = {"role", "roleName", "rank", "position", "status", "type", "displayName", "username"};
-        for (String f : fields) {
-            String value = m.optString(f, "").toLowerCase(Locale.ROOT);
-            if (value.contains("obywatel")) return true;
+        JSONArray roleNames = m.optJSONArray("roleNames");
+        if (roleNames != null) {
+            for (int i = 0; i < roleNames.length(); i++) {
+                String value = String.valueOf(roleNames.opt(i)).toLowerCase(Locale.ROOT).trim();
+                if (value.equals("obywatel") || value.startsWith("obywatel ") || value.endsWith(" obywatel") || value.contains(" obywatel ")) {
+                    return true;
+                }
+            }
         }
+
         JSONArray roles = m.optJSONArray("roles");
         if (roles != null) {
             for (int i = 0; i < roles.length(); i++) {
                 Object r = roles.opt(i);
-                if (String.valueOf(r).toLowerCase(Locale.ROOT).contains("obywatel")) return true;
                 if (r instanceof JSONObject) {
                     JSONObject ro = (JSONObject) r;
-                    if (ro.optString("name", "").toLowerCase(Locale.ROOT).contains("obywatel")) return true;
+                    String name = first(ro, "name", "roleName").toLowerCase(Locale.ROOT).trim();
+                    if (name.equals("obywatel") || name.startsWith("obywatel ") || name.endsWith(" obywatel") || name.contains(" obywatel ")) return true;
                 }
             }
         }
@@ -189,20 +196,20 @@ public class MainActivity extends Activity {
         return "";
     }
 
+    // Backend zwraca rank/rankRole jako rzeczywistą rolę Discord.
     private String realRank(JSONObject m) {
-        String r = first(m, "rank", "stopien", "position", "stanowisko", "grade", "ranga", "roleName", "role");
+        String r = first(m, "rankRole", "rank", "stopien", "position", "stanowisko", "grade", "ranga", "roleName", "role");
         if (!r.isEmpty() && !r.equalsIgnoreCase("obywatel")) return r;
-        JSONArray roles = m.optJSONArray("roles");
-        if (roles != null) {
-            for (int i = 0; i < roles.length(); i++) {
-                Object x = roles.opt(i);
-                String n = "";
-                if (x instanceof JSONObject) n = first((JSONObject)x, "name", "roleName", "rank", "position");
-                else n = String.valueOf(x);
-                if (!n.trim().isEmpty() && !n.toLowerCase(Locale.ROOT).contains("obywatel")) return n.trim();
+
+        JSONArray roleNames = m.optJSONArray("roleNames");
+        if (roleNames != null) {
+            for (int i = 0; i < roleNames.length(); i++) {
+                String n = String.valueOf(roleNames.opt(i)).trim();
+                String low = n.toLowerCase(Locale.ROOT);
+                if (!n.isEmpty() && !low.equals("obywatel") && !low.contains("bot") && !low.contains("admin")) return n;
             }
         }
-        return "Brak przypisanego stopnia/stanowiska";
+        return "Brak przypisanej rangi SW";
     }
 
     private String officerName(JSONObject m) {
@@ -273,7 +280,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
         cp.setMargins(0, dp(5), 0, 0);
         TextView n = text("👮 " + name, 15, Color.rgb(20,20,20), true);
-        TextView q = text("STOPIEŃ / STANOWISKO: " + rank, 13, Color.rgb(20,80,45), true);
+        TextView q = text("RANGA / STOPIEŃ SW: " + rank, 13, Color.rgb(20,80,45), true);
         TextView x = text("ID: " + (id.isEmpty() ? "-" : id) + "    •    STATUS: " + status, 11, Color.DKGRAY, false);
         card.addView(n);
         card.addView(q);
@@ -329,26 +336,38 @@ public class MainActivity extends Activity {
             }
             ex.execute(() -> {
                 try {
-                    HttpURLConnection c = (HttpURLConnection)new URL(API + "/api/broadcaster/send").openConnection();
-                    c.setRequestMethod("POST");
-                    c.setDoOutput(true);
-                    c.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-                    JSONObject j = new JSONObject();
-                    j.put("channelId", channel.getText().toString().trim());
-                    j.put("title", title.getText().toString());
-                    j.put("content", message.getText().toString());
-                    c.getOutputStream().write(j.toString().getBytes(StandardCharsets.UTF_8));
-                    int code = c.getResponseCode();
-                    runOnUiThread(() -> out.setText(code >= 200 && code < 300 ? "Komunikat wysłany." : "Błąd HTTP " + code));
+                    JSONObject body = new JSONObject();
+                    body.put("channelId", channel.getText().toString().trim());
+                    body.put("title", title.getText().toString().trim());
+                    body.put("content", message.getText().toString().trim());
+                    body.put("color", "#2380B5");
+                    String response = postJson(API + "/api/broadcaster/send", body.toString());
+                    runOnUiThread(() -> out.setText("✅ Komunikat wysłany.\n" + response));
                 } catch (Exception e) {
-                    runOnUiThread(() -> out.setText("Błąd: " + e.getMessage()));
+                    runOnUiThread(() -> out.setText("❌ Nie udało się wysłać.\n" + e.getMessage()));
                 }
             });
         });
     }
 
-    @Override protected void onDestroy() {
-        ex.shutdownNow();
-        super.onDestroy();
+    private String postJson(String address, String body) throws Exception {
+        HttpURLConnection c = (HttpURLConnection)new URL(address).openConnection();
+        c.setRequestMethod("POST");
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(25000);
+        c.setDoOutput(true);
+        c.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+        try (OutputStream out = c.getOutputStream()) {
+            out.write(body.getBytes(StandardCharsets.UTF_8));
+        }
+        int code = c.getResponseCode();
+        InputStream stream = code < 400 ? c.getInputStream() : c.getErrorStream();
+        BufferedReader r = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
+        StringBuilder z = new StringBuilder();
+        String line;
+        while ((line = r.readLine()) != null) z.append(line);
+        r.close();
+        if (code < 200 || code >= 300) throw new Exception("HTTP " + code + ": " + z);
+        return z.toString();
     }
 }
