@@ -69,4 +69,30 @@ async function listChannels(guildId) {
   return discordRequest(`/guilds/${guildId}/channels`, { method: 'GET' });
 }
 
-module.exports = { sendBroadcast, listChannels };
+async function listMessages(channelId, limit = 50) {
+  if (!channelId) {
+    const error = new Error('CHANNEL_ID_REQUIRED');
+    error.status = 400;
+    throw error;
+  }
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  return discordRequest(`/channels/${channelId}/messages?limit=${safeLimit}`, { method: 'GET' });
+}
+
+async function sendMessage(channelId, content) {
+  if (!channelId || !String(content || '').trim()) {
+    const error = new Error('CHANNEL_ID_AND_CONTENT_REQUIRED');
+    error.status = 400;
+    throw error;
+  }
+
+  return discordRequest(`/channels/${channelId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({
+      content: String(content).trim().slice(0, 2000),
+      allowed_mentions: { parse: [] }
+    })
+  });
+}
+
+module.exports = { sendBroadcast, listChannels, listMessages, sendMessage };
