@@ -31,6 +31,20 @@ function discordError(status, data) {
   return { error: 'DISCORD_API_ERROR', message: message || 'Discord API zwróciło błąd.', discordCode: code, details: data };
 }
 
+async function discordGet(path) {
+  const response = await fetch(`https://discord.com/api/v10${path}`, {
+    headers: { Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}` }
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    const error = new Error(data?.message || 'Discord API error');
+    error.status = response.status;
+    error.details = data;
+    throw error;
+  }
+  return data;
+}
+
 app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'SW Android Backend', guildId: GUILD_ID, clientId: CLIENT_ID, discordTokenConfigured: Boolean(process.env.DISCORD_BOT_TOKEN) }));
 app.get('/api/config', (req, res) => res.json({ guildId: GUILD_ID, clientId: CLIENT_ID, ranks }));
 
@@ -65,6 +79,11 @@ app.get('/api/officers', async (req, res) => {
       return res.status(503).json({ error: 'DISCORD_BOT_TOKEN_NOT_CONFIGURED', message: 'Na backendzie nie ustawiono DISCORD_BOT_TOKEN.' });
     }
 
+    // Najpierw pobieramy role serwera, aby zamienić ID ról członków na ich nazwy.
+    // Dzięki temu aplikacja może pokazać rzeczywisty stopień funkcjonariusza.
+    const discordRoles = await discordGet(`/guilds/${GUILD_ID}/roles`);
+    const roleMap = new Map(discordRoles.map(role => [role.id, role.name]));
+
     const allMembers = [];
     let after = '0';
 
@@ -94,19 +113,38 @@ app.get('/api/officers', async (req, res) => {
 
     const officers = allMembers
       .filter(m => m.user && !m.user.bot)
-      .map(m => ({
-        id: m.user.id,
-        username: m.user.username,
-        displayName: m.nick || m.user.global_name || m.user.username,
-        avatar: m.user.avatar ? `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.png` : null,
-        roles: m.roles || [],
-        joinedAt: m.joined_at || null
-      }));
+      .map(m => {
+        const memberRoleNames = (m.roles || [])
+          .map(roleId => roleMap.get(roleId))
+          .filter(Boolean);
+
+        // Wybieramy najwyższy stopień SW znajdujący się w rolach Discorda.
+        // Jeśli użytkownik nie ma roli stopnia, pokazujemy "Brak stopnia".
+        let rank = 'Brak stopnia';
+        for (let i = ranks.length - 1; i >= 0; i--) {
+          if (memberRoleNames.some(name => name.toLowerCase() === ranks[i].toLowerCase())) {
+            rank = ranks[i];
+            break;
+          }
+        }
+
+        return {
+          id: m.user.id,
+          username: m.user.username,
+          displayName: m.nick || m.user.global_name || m.user.username,
+          avatar: m.user.avatar ? `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.png` : null,
+          roles: m.roles || [],
+          roleNames: memberRoleNames,
+          rank,
+          status: 'Aktywny',
+          joinedAt: m.joined_at || null
+        };
+      });
 
     res.json({ guildId: GUILD_ID, count: officers.length, officers });
   } catch (error) {
     console.error('Officers backend error:', error);
-    res.status(500).json({ error: 'BACKEND_ERROR', message: error.message || 'Nie udało się pobrać członków Discord.' });
+    res.status(error.status || 500).json(discordError(error.status || 500, error.details));
   }
 });
 
