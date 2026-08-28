@@ -90,13 +90,8 @@ function hasCitizenRole(roleNames) {
 function hasSwRole(roleNames, rank) {
   if (rank) return true;
   return roleNames.map(normalizeRoleName).some(role =>
-    role === 'sw' ||
-    role.startsWith('sw ') ||
-    role.endsWith(' sw') ||
-    role.includes(' sw ') ||
-    role.includes('sluzba wiezienna') ||
-    role.includes('funkcjonariusz') ||
-    role.includes('funkcjonarius') ||
+    role === 'sw' || role.startsWith('sw ') || role.endsWith(' sw') || role.includes(' sw ') ||
+    role.includes('sluzba wiezienna') || role.includes('funkcjonariusz') || role.includes('funkcjonarius') ||
     role.includes('kandydat')
   );
 }
@@ -106,6 +101,28 @@ function hasAnyNonCitizenRole(roleNames) {
     const normalized = normalizeRoleName(role);
     return normalized && normalized !== '@everyone' && !normalized.includes('obywatel');
   });
+}
+
+// Role techniczne/organizacyjne nie są stopniem funkcjonariusza.
+function isTechnicalRole(name) {
+  const r = normalizeRoleName(name);
+  if (!r || r === '@everyone') return true;
+  const technical = [
+    'bot', 'admin', 'administrator', 'moderator', 'mod', 'staff', 'owner', 'wlasciciel',
+    'zarzad', 'zarzadca', 'developer', 'deweloper', 'technik', 'support', 'pomoc',
+    'obywatel', 'booster', 'nitro', 'mute', 'muted', 'everyone', 'pracownik sw'
+  ];
+  return technical.some(x => r === x || r.startsWith(x + ' ') || r.endsWith(' ' + x));
+}
+
+// Gdy rola nie ma nazwy odpowiadającej wpisanej liście stopni,
+// pokazujemy rzeczywistą rolę SW z Discorda zamiast "Brak stopnia".
+function getActualSwRole(roleObjects, rank) {
+  if (rank) return rank;
+  const candidates = roleObjects
+    .filter(r => r && !isTechnicalRole(r.name) && !normalizeRoleName(r.name).includes('obywatel'))
+    .sort((a, b) => Number(b.position || 0) - Number(a.position || 0));
+  return candidates[0]?.name || 'Brak przypisanej rangi SW';
 }
 
 app.get('/api/health', (req, res) => res.json({
@@ -147,7 +164,7 @@ app.get('/api/officers', async (req, res) => {
     }
 
     const discordRoles = await discordGet(`/guilds/${GUILD_ID}/roles`);
-    const roleMap = new Map(discordRoles.map(role => [role.id, role.name]));
+    const roleMap = new Map(discordRoles.map(role => [role.id, role]));
     const allMembers = [];
     let after = null;
 
@@ -172,22 +189,22 @@ app.get('/api/officers', async (req, res) => {
     const parsed = allMembers
       .filter(member => member.user && !member.user.bot)
       .map(member => {
-        const roleNames = (member.roles || []).map(id => roleMap.get(id)).filter(Boolean);
+        const roleObjects = (member.roles || []).map(id => roleMap.get(id)).filter(Boolean);
+        const roleNames = roleObjects.map(role => role.name).filter(Boolean);
         const rank = findRank(roleNames);
         const citizen = hasCitizenRole(roleNames);
         const sw = hasSwRole(roleNames, rank);
         const fallback = hasAnyNonCitizenRole(roleNames);
-        return { member, roleNames, rank, citizen, sw, fallback };
+        const actualRole = getActualSwRole(roleObjects, rank);
+        return { member, roleObjects, roleNames, rank, actualRole, citizen, sw, fallback };
       });
 
     const officers = parsed
-      // Obywatel zawsze jest wykluczony.
       .filter(item => !item.citizen)
-      // Najpierw prawdziwe role SW. Fallback pozwala pokazać również funkcjonariusza,
-      // którego nazwa roli jest niestandardowa, zamiast gubić go z listy.
       .filter(item => item.sw || item.fallback)
       .map(item => {
         const m = item.member;
+        const realRank = item.actualRole;
         return {
           id: m.user.id,
           username: m.user.username,
@@ -195,7 +212,9 @@ app.get('/api/officers', async (req, res) => {
           avatar: m.user.avatar ? `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.png` : null,
           roles: m.roles || [],
           roleNames: item.roleNames,
-          rank: item.rank || 'Brak stopnia',
+          rank: realRank,
+          rankRole: realRank,
+          allRoles: item.roleNames,
           status: 'Aktywny',
           joinedAt: m.joined_at || null
         };
@@ -218,8 +237,8 @@ app.get('/api/officers', async (req, res) => {
       meta: {
         membersScanned: allMembers.length,
         citizensExcluded,
-        officersWithRank: officers.filter(o => o.rank !== 'Brak stopnia').length,
-        officersWithoutRank: officers.filter(o => o.rank === 'Brak stopnia').length
+        officersWithRank: officers.filter(o => o.rank !== 'Brak przypisanej rangi SW').length,
+        officersWithoutRank: officers.filter(o => o.rank === 'Brak przypisanej rangi SW').length
       }
     });
   } catch (error) {
