@@ -12,7 +12,6 @@ const BROADCASTER_ROLE_IDS = (process.env.BROADCASTER_ROLE_IDS || '').split(',')
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
-// Oficjalna hierarchia stopni SW używana przez BLUEBIRD SW.
 const ranks = [
   'Kandydat',
   'Młodszy Funkcjonariusz',
@@ -54,7 +53,6 @@ async function discordGet(path) {
   return data;
 }
 
-// Normalizacja nazw ról usuwa emoji, polskie znaki i różnice wielkości liter.
 function normalizeRoleName(value) {
   return String(value || '')
     .replace(/ł/g, 'l').replace(/Ł/g, 'L')
@@ -66,75 +64,48 @@ function normalizeRoleName(value) {
     .toLowerCase();
 }
 
-// Rozpoznawanie stopnia jest celowo oparte na aliasach, ponieważ role Discord
-// mogą mieć np. emoji, prefiks SW, numer lub separator "|" / "•".
 function findRank(roleNames) {
   const roles = roleNames.map(normalizeRoleName);
-
   const rules = [
-    {
-      rank: 'Inspektor Generalny',
-      words: ['inspektor generalny', 'inspektor general', 'inspektor gen', 'generalny inspektor']
-    },
-    {
-      rank: 'Zastępca Naczelnika',
-      words: ['zastepca naczelnika', 'zastepca naczelnika sw', 'zastepca nacz', 'zast naczelnika', 'zast. naczelnika']
-    },
-    {
-      rank: 'Dowódca Zmiany',
-      words: ['dowodca zmiany', 'dowodca zm', 'dowodca-zmiany', 'dow zmiany', 'dow. zmiany']
-    },
-    {
-      rank: 'Starszy Funkcjonariusz',
-      words: ['starszy funkcjonariusz', 'starszy funkc', 'starszy funkc.', 'st funkcjonariusz', 'st. funkcjonariusz']
-    },
-    {
-      rank: 'Młodszy Funkcjonariusz',
-      words: ['mlodszy funkcjonariusz', 'mlodszy funkc', 'mlodszy funkc.', 'ml funkcjonariusz', 'ml. funkcjonariusz']
-    },
-    {
-      rank: 'Funkcjonariusz',
-      words: ['funkcjonariusz sw', 'funkcjonariusz']
-    },
-    {
-      rank: 'Kandydat',
-      words: ['kandydat sw', 'kandydat']
-    }
+    { rank: 'Inspektor Generalny', words: ['inspektor generalny', 'inspektor general', 'inspektor gen', 'generalny inspektor'] },
+    { rank: 'Zastępca Naczelnika', words: ['zastepca naczelnika', 'zastepca nacz', 'zast naczelnika'] },
+    { rank: 'Dowódca Zmiany', words: ['dowodca zmiany', 'dowodca zm', 'dow zmiany'] },
+    { rank: 'Starszy Funkcjonariusz', words: ['starszy funkcjonariusz', 'starszy funkc', 'st funkcjonariusz'] },
+    { rank: 'Młodszy Funkcjonariusz', words: ['mlodszy funkcjonariusz', 'mlodszy funkc', 'ml funkcjonariusz'] },
+    { rank: 'Funkcjonariusz', words: ['funkcjonariusz sw', 'funkcjonariusz'] },
+    { rank: 'Kandydat', words: ['kandydat sw', 'kandydat'] }
   ];
-
-  // Najpierw najwyższe stopnie. To ważne, gdy funkcjonariusz ma kilka ról,
-  // np. "Funkcjonariusz" oraz "Starszy Funkcjonariusz".
   for (const rule of rules) {
-    if (roles.some(role => rule.words.some(word => role === word || role.includes(word)))) {
-      return rule.rank;
-    }
+    if (roles.some(role => rule.words.some(word => role === word || role.includes(word)))) return rule.rank;
   }
-
   return null;
 }
 
 function hasCitizenRole(roleNames) {
   return roleNames.map(normalizeRoleName).some(role =>
-    role === 'obywatel' ||
-    role.startsWith('obywatel ') ||
-    role.endsWith(' obywatel') ||
-    role.includes(' obywatel ')
+    role === 'obywatel' || role.startsWith('obywatel ') || role.endsWith(' obywatel') || role.includes(' obywatel ')
   );
 }
 
-// Osoba jest traktowana jako członek SW, jeśli ma rozpoznany stopień albo
-// rolę wyraźnie oznaczającą SW/Służbę Więzienną. Dzięki temu nie zgubimy
-// funkcjonariusza tylko dlatego, że jego nazwa roli ma niestandardowy zapis.
-function hasSwRole(roleNames) {
+function hasSwRole(roleNames, rank) {
+  if (rank) return true;
   return roleNames.map(normalizeRoleName).some(role =>
     role === 'sw' ||
     role.startsWith('sw ') ||
     role.endsWith(' sw') ||
-    role.includes(' sluzba wiezienna') ||
-    role.includes('suzba wiezienna') ||
+    role.includes(' sw ') ||
+    role.includes('sluzba wiezienna') ||
     role.includes('funkcjonariusz') ||
-    role.includes('funkcjonarius')
+    role.includes('funkcjonarius') ||
+    role.includes('kandydat')
   );
+}
+
+function hasAnyNonCitizenRole(roleNames) {
+  return roleNames.some(role => {
+    const normalized = normalizeRoleName(role);
+    return normalized && normalized !== '@everyone' && !normalized.includes('obywatel');
+  });
 }
 
 app.get('/api/health', (req, res) => res.json({
@@ -180,8 +151,6 @@ app.get('/api/officers', async (req, res) => {
     const allMembers = [];
     let after = null;
 
-    // Pobieramy całą kadrę strona po stronie. Discord zwraca maks. 1000 osób
-    // na żądanie; kontynuujemy aż otrzymamy mniej niż 1000.
     for (let page = 0; page < 100; page++) {
       const url = new URL(`https://discord.com/api/v10/guilds/${GUILD_ID}/members`);
       url.searchParams.set('limit', '1000');
@@ -192,10 +161,7 @@ app.get('/api/officers', async (req, res) => {
       });
       const members = await response.json();
 
-      if (!response.ok) {
-        console.error('Discord /members error:', response.status, members);
-        return res.status(response.status).json(discordError(response.status, members));
-      }
+      if (!response.ok) return res.status(response.status).json(discordError(response.status, members));
       if (!Array.isArray(members) || members.length === 0) break;
 
       allMembers.push(...members);
@@ -203,25 +169,23 @@ app.get('/api/officers', async (req, res) => {
       if (members.length < 1000 || !after) break;
     }
 
-    const officers = allMembers
+    const parsed = allMembers
       .filter(member => member.user && !member.user.bot)
       .map(member => {
-        const roleNames = (member.roles || [])
-          .map(roleId => roleMap.get(roleId))
-          .filter(Boolean);
-
+        const roleNames = (member.roles || []).map(id => roleMap.get(id)).filter(Boolean);
         const rank = findRank(roleNames);
         const citizen = hasCitizenRole(roleNames);
-        const sw = hasSwRole(roleNames) || Boolean(rank);
+        const sw = hasSwRole(roleNames, rank);
+        const fallback = hasAnyNonCitizenRole(roleNames);
+        return { member, roleNames, rank, citizen, sw, fallback };
+      });
 
-        return { member, roleNames, rank, citizen, sw };
-      })
-      // Ranga Obywatel nigdy nie może trafić do kadry BLUEBIRD SW.
+    const officers = parsed
+      // Obywatel zawsze jest wykluczony.
       .filter(item => !item.citizen)
-      // Pokazujemy wszystkich członków SW, nie tylko tych z idealnie nazwanym
-      // stopniem. Jeżeli rola jest niestandardowa, aplikacja pokaże "Brak stopnia"
-      // zamiast całkowicie ukrywać funkcjonariusza.
-      .filter(item => item.sw)
+      // Najpierw prawdziwe role SW. Fallback pozwala pokazać również funkcjonariusza,
+      // którego nazwa roli jest niestandardowa, zamiast gubić go z listy.
+      .filter(item => item.sw || item.fallback)
       .map(item => {
         const m = item.member;
         return {
@@ -237,7 +201,6 @@ app.get('/api/officers', async (req, res) => {
         };
       });
 
-    // Stabilna kolejność: najwyższy stopień pierwszy, potem nazwisko/nazwa.
     const rankOrder = new Map(ranks.map((rank, index) => [rank, index]));
     officers.sort((a, b) => {
       const ar = rankOrder.has(a.rank) ? rankOrder.get(a.rank) : -1;
@@ -246,16 +209,17 @@ app.get('/api/officers', async (req, res) => {
       return a.displayName.localeCompare(b.displayName, 'pl', { sensitivity: 'base' });
     });
 
+    const citizensExcluded = parsed.filter(item => item.citizen).length;
+
     res.json({
       guildId: GUILD_ID,
       count: officers.length,
       officers,
       meta: {
         membersScanned: allMembers.length,
-        citizensExcluded: allMembers.filter(member => {
-          const roleNames = (member.roles || []).map(roleId => roleMap.get(roleId)).filter(Boolean);
-          return hasCitizenRole(roleNames);
-        }).length
+        citizensExcluded,
+        officersWithRank: officers.filter(o => o.rank !== 'Brak stopnia').length,
+        officersWithoutRank: officers.filter(o => o.rank === 'Brak stopnia').length
       }
     });
   } catch (error) {
