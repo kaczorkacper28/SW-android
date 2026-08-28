@@ -12,6 +12,7 @@ const BROADCASTER_ROLE_IDS = (process.env.BROADCASTER_ROLE_IDS || '').split(',')
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
+// Oficjalna hierarchia stopni SW używana przez BLUEBIRD SW.
 const ranks = [
   'Kandydat',
   'Młodszy Funkcjonariusz',
@@ -53,7 +54,7 @@ async function discordGet(path) {
   return data;
 }
 
-// Normalizacja nazw ról: emoji, wielkość liter i polskie znaki nie przeszkadzają.
+// Normalizacja nazw ról usuwa emoji, polskie znaki i różnice wielkości liter.
 function normalizeRoleName(value) {
   return String(value || '')
     .replace(/ł/g, 'l').replace(/Ł/g, 'L')
@@ -65,37 +66,74 @@ function normalizeRoleName(value) {
     .toLowerCase();
 }
 
-// Rozpoznajemy stopień niezależnie od dodatkowych elementów nazwy roli,
-// np. "🎖️ SW | Starszy Funkcjonariusz" albo "Starszy Funkcjonariusz • SW".
+// Rozpoznawanie stopnia jest celowo oparte na aliasach, ponieważ role Discord
+// mogą mieć np. emoji, prefiks SW, numer lub separator "|" / "•".
 function findRank(roleNames) {
   const roles = roleNames.map(normalizeRoleName);
 
   const rules = [
-    { rank: 'Inspektor Generalny', words: ['inspektor generalny', 'inspektor gen', 'generalny inspektor'] },
-    { rank: 'Zastępca Naczelnika', words: ['zastepca naczelnika', 'zastepca nacz', 'zastepca naczelnika sw'] },
-    { rank: 'Dowódca Zmiany', words: ['dowodca zmiany', 'dowodca zm', 'dowodca-zmiany'] },
-    { rank: 'Starszy Funkcjonariusz', words: ['starszy funkcjonariusz', 'starszy funkc', 'st funkcjonariusz', 'st. funkcjonariusz'] },
-    { rank: 'Młodszy Funkcjonariusz', words: ['mlodszy funkcjonariusz', 'mlodszy funkc', 'ml funkcjonariusz', 'ml. funkcjonariusz'] },
-    { rank: 'Funkcjonariusz', words: ['funkcjonariusz', 'funkcjonariusz sw'] },
-    { rank: 'Kandydat', words: ['kandydat', 'kandydat sw'] }
+    {
+      rank: 'Inspektor Generalny',
+      words: ['inspektor generalny', 'inspektor general', 'inspektor gen', 'generalny inspektor']
+    },
+    {
+      rank: 'Zastępca Naczelnika',
+      words: ['zastepca naczelnika', 'zastepca naczelnika sw', 'zastepca nacz', 'zast naczelnika', 'zast. naczelnika']
+    },
+    {
+      rank: 'Dowódca Zmiany',
+      words: ['dowodca zmiany', 'dowodca zm', 'dowodca-zmiany', 'dow zmiany', 'dow. zmiany']
+    },
+    {
+      rank: 'Starszy Funkcjonariusz',
+      words: ['starszy funkcjonariusz', 'starszy funkc', 'starszy funkc.', 'st funkcjonariusz', 'st. funkcjonariusz']
+    },
+    {
+      rank: 'Młodszy Funkcjonariusz',
+      words: ['mlodszy funkcjonariusz', 'mlodszy funkc', 'mlodszy funkc.', 'ml funkcjonariusz', 'ml. funkcjonariusz']
+    },
+    {
+      rank: 'Funkcjonariusz',
+      words: ['funkcjonariusz sw', 'funkcjonariusz']
+    },
+    {
+      rank: 'Kandydat',
+      words: ['kandydat sw', 'kandydat']
+    }
   ];
 
-  // Najpierw szukamy najwyższych stopni. Dzięki temu osoba z kilkoma rolami
-  // nie zostanie błędnie oznaczona jako zwykły Funkcjonariusz.
+  // Najpierw najwyższe stopnie. To ważne, gdy funkcjonariusz ma kilka ról,
+  // np. "Funkcjonariusz" oraz "Starszy Funkcjonariusz".
   for (const rule of rules) {
     if (roles.some(role => rule.words.some(word => role === word || role.includes(word)))) {
       return rule.rank;
     }
   }
 
-  return 'Brak stopnia';
+  return null;
 }
 
 function hasCitizenRole(roleNames) {
   return roleNames.map(normalizeRoleName).some(role =>
     role === 'obywatel' ||
     role.startsWith('obywatel ') ||
-    role.includes(' obywatel')
+    role.endsWith(' obywatel') ||
+    role.includes(' obywatel ')
+  );
+}
+
+// Osoba jest traktowana jako członek SW, jeśli ma rozpoznany stopień albo
+// rolę wyraźnie oznaczającą SW/Służbę Więzienną. Dzięki temu nie zgubimy
+// funkcjonariusza tylko dlatego, że jego nazwa roli ma niestandardowy zapis.
+function hasSwRole(roleNames) {
+  return roleNames.map(normalizeRoleName).some(role =>
+    role === 'sw' ||
+    role.startsWith('sw ') ||
+    role.endsWith(' sw') ||
+    role.includes(' sluzba wiezienna') ||
+    role.includes('suzba wiezienna') ||
+    role.includes('funkcjonariusz') ||
+    role.includes('funkcjonarius')
   );
 }
 
@@ -140,12 +178,14 @@ app.get('/api/officers', async (req, res) => {
     const discordRoles = await discordGet(`/guilds/${GUILD_ID}/roles`);
     const roleMap = new Map(discordRoles.map(role => [role.id, role.name]));
     const allMembers = [];
-    let after = '0';
+    let after = null;
 
-    for (let page = 0; page < 20; page++) {
+    // Pobieramy całą kadrę strona po stronie. Discord zwraca maks. 1000 osób
+    // na żądanie; kontynuujemy aż otrzymamy mniej niż 1000.
+    for (let page = 0; page < 100; page++) {
       const url = new URL(`https://discord.com/api/v10/guilds/${GUILD_ID}/members`);
       url.searchParams.set('limit', '1000');
-      if (after !== '0') url.searchParams.set('after', after);
+      if (after) url.searchParams.set('after', after);
 
       const response = await fetch(url, {
         headers: { Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}` }
@@ -159,8 +199,8 @@ app.get('/api/officers', async (req, res) => {
       if (!Array.isArray(members) || members.length === 0) break;
 
       allMembers.push(...members);
-      if (members.length < 1000) break;
-      after = members[members.length - 1].user.id;
+      after = members[members.length - 1]?.user?.id || null;
+      if (members.length < 1000 || !after) break;
     }
 
     const officers = allMembers
@@ -170,16 +210,18 @@ app.get('/api/officers', async (req, res) => {
           .map(roleId => roleMap.get(roleId))
           .filter(Boolean);
 
-        return {
-          member,
-          roleNames,
-          rank: findRank(roleNames)
-        };
+        const rank = findRank(roleNames);
+        const citizen = hasCitizenRole(roleNames);
+        const sw = hasSwRole(roleNames) || Boolean(rank);
+
+        return { member, roleNames, rank, citizen, sw };
       })
-      // Obywatele nie pojawiają się na liście SW.
-      .filter(item => !hasCitizenRole(item.roleNames))
-      // Na liście pokazujemy tylko osoby, którym można przypisać stopień SW.
-      .filter(item => item.rank !== 'Brak stopnia')
+      // Ranga Obywatel nigdy nie może trafić do kadry BLUEBIRD SW.
+      .filter(item => !item.citizen)
+      // Pokazujemy wszystkich członków SW, nie tylko tych z idealnie nazwanym
+      // stopniem. Jeżeli rola jest niestandardowa, aplikacja pokaże "Brak stopnia"
+      // zamiast całkowicie ukrywać funkcjonariusza.
+      .filter(item => item.sw)
       .map(item => {
         const m = item.member;
         return {
@@ -189,13 +231,33 @@ app.get('/api/officers', async (req, res) => {
           avatar: m.user.avatar ? `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.png` : null,
           roles: m.roles || [],
           roleNames: item.roleNames,
-          rank: item.rank,
+          rank: item.rank || 'Brak stopnia',
           status: 'Aktywny',
           joinedAt: m.joined_at || null
         };
       });
 
-    res.json({ guildId: GUILD_ID, count: officers.length, officers });
+    // Stabilna kolejność: najwyższy stopień pierwszy, potem nazwisko/nazwa.
+    const rankOrder = new Map(ranks.map((rank, index) => [rank, index]));
+    officers.sort((a, b) => {
+      const ar = rankOrder.has(a.rank) ? rankOrder.get(a.rank) : -1;
+      const br = rankOrder.has(b.rank) ? rankOrder.get(b.rank) : -1;
+      if (ar !== br) return br - ar;
+      return a.displayName.localeCompare(b.displayName, 'pl', { sensitivity: 'base' });
+    });
+
+    res.json({
+      guildId: GUILD_ID,
+      count: officers.length,
+      officers,
+      meta: {
+        membersScanned: allMembers.length,
+        citizensExcluded: allMembers.filter(member => {
+          const roleNames = (member.roles || []).map(roleId => roleMap.get(roleId)).filter(Boolean);
+          return hasCitizenRole(roleNames);
+        }).length
+      }
+    });
   } catch (error) {
     console.error('Officers backend error:', error);
     res.status(error.status || 500).json(discordError(error.status || 500, error.details));
