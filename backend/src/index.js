@@ -13,7 +13,16 @@ const BROADCASTER_ROLE_IDS = (process.env.BROADCASTER_ROLE_IDS || '').split(',')
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
-const ranks = ['Kandydat','Młodszy Funkcjonariusz','Funkcjonariusz','Starszy Funkcjonariusz','Dowódca Zmiany','Zastępca Naczelnika','Inspektor Generalny'];
+const ranks = [
+  'Kandydat',
+  'Młodszy Funkcjonariusz',
+  'Funkcjonariusz',
+  'Starszy Funkcjonariusz',
+  'Dowódca Zmiany',
+  'Zastępca Naczelnika',
+  'Inspektor Generalny'
+];
+
 const broadcastHistory = [];
 
 function isAuthorized(req) {
@@ -45,7 +54,57 @@ async function discordGet(path) {
   return data;
 }
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', service: 'SW Android Backend', guildId: GUILD_ID, clientId: CLIENT_ID, discordTokenConfigured: Boolean(process.env.DISCORD_BOT_TOKEN) }));
+// Usuwamy emoji, znaki specjalne i wielokrotne spacje.
+// Dzięki temu rozpoznajemy np. "🎖️ Funkcjonariusz" jako "Funkcjonariusz".
+function normalizeRoleName(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9ąćęłńóśźżĄĆĘŁŃÓŚŹŻ ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function findRank(roleNames) {
+  const normalizedRoles = roleNames.map(normalizeRoleName);
+
+  // Sprawdzamy od najwyższego stopnia do najniższego.
+  for (let i = ranks.length - 1; i >= 0; i--) {
+    const target = normalizeRoleName(ranks[i]);
+    if (normalizedRoles.some(role => role === target || role.includes(target))) {
+      return ranks[i];
+    }
+  }
+
+  // Dodatkowe skróty/nazwy używane czasem na serwerach RP.
+  const aliases = [
+    { rank: 'Inspektor Generalny', values: ['inspektor generalny', 'inspektor gen', 'ig'] },
+    { rank: 'Zastępca Naczelnika', values: ['zastepca naczelnika', 'zastepca naczelnika sw', 'zastepca nacz'] },
+    { rank: 'Dowódca Zmiany', values: ['dowodca zmiany', 'dowodca zm', 'dz'] },
+    { rank: 'Starszy Funkcjonariusz', values: ['starszy funkcjonariusz', 'starszy funkc', 'st funkcjonariusz'] },
+    { rank: 'Funkcjonariusz', values: ['funkcjonariusz', 'funkcjonariusz sw'] },
+    { rank: 'Młodszy Funkcjonariusz', values: ['mlodszy funkcjonariusz', 'mlodszy funkc'] },
+    { rank: 'Kandydat', values: ['kandydat', 'kandydat sw'] }
+  ];
+
+  for (const item of aliases) {
+    if (normalizedRoles.some(role => item.values.some(alias => role === alias || role.includes(alias)))) {
+      return item.rank;
+    }
+  }
+
+  return 'Brak stopnia';
+}
+
+app.get('/api/health', (req, res) => res.json({
+  status: 'ok',
+  service: 'SW Android Backend',
+  guildId: GUILD_ID,
+  clientId: CLIENT_ID,
+  discordTokenConfigured: Boolean(process.env.DISCORD_BOT_TOKEN)
+}));
+
 app.get('/api/config', (req, res) => res.json({ guildId: GUILD_ID, clientId: CLIENT_ID, ranks }));
 
 app.get('/api/discord/channels', async (req, res) => {
@@ -79,16 +138,12 @@ app.get('/api/officers', async (req, res) => {
       return res.status(503).json({ error: 'DISCORD_BOT_TOKEN_NOT_CONFIGURED', message: 'Na backendzie nie ustawiono DISCORD_BOT_TOKEN.' });
     }
 
-    // Najpierw pobieramy role serwera, aby zamienić ID ról członków na ich nazwy.
-    // Dzięki temu aplikacja może pokazać rzeczywisty stopień funkcjonariusza.
     const discordRoles = await discordGet(`/guilds/${GUILD_ID}/roles`);
     const roleMap = new Map(discordRoles.map(role => [role.id, role.name]));
 
     const allMembers = [];
     let after = '0';
 
-    // Discord pozwala pobierać członków maksymalnie po 1000 na żądanie.
-    // Paginacja pozwala obsłużyć również większy serwer.
     for (let page = 0; page < 20; page++) {
       const url = new URL(`https://discord.com/api/v10/guilds/${GUILD_ID}/members`);
       url.searchParams.set('limit', '1000');
@@ -118,15 +173,7 @@ app.get('/api/officers', async (req, res) => {
           .map(roleId => roleMap.get(roleId))
           .filter(Boolean);
 
-        // Wybieramy najwyższy stopień SW znajdujący się w rolach Discorda.
-        // Jeśli użytkownik nie ma roli stopnia, pokazujemy "Brak stopnia".
-        let rank = 'Brak stopnia';
-        for (let i = ranks.length - 1; i >= 0; i--) {
-          if (memberRoleNames.some(name => name.toLowerCase() === ranks[i].toLowerCase())) {
-            rank = ranks[i];
-            break;
-          }
-        }
+        const rank = findRank(memberRoleNames);
 
         return {
           id: m.user.id,
