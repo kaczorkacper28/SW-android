@@ -27,6 +27,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Test connection settings
+        run: |
+          mkdir -p "$RUNNER_TEMP/sw-connection-tests"
+          javac -d "$RUNNER_TEMP/sw-connection-tests" app/src/main/java/pl/sw/android/ConnectionSettings.java app/src/test/java/pl/sw/android/ConnectionSettingsTest.java app/src/test/java/pl/sw/android/ConnectionTransportTest.java
+          java -cp "$RUNNER_TEMP/sw-connection-tests" pl.sw.android.ConnectionSettingsTest
+          java -cp "$RUNNER_TEMP/sw-connection-tests" pl.sw.android.ConnectionTransportTest
+
       # ==============================
       # ANDROID SDK
       # ==============================

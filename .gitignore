@@ -1,0 +1,11 @@
+.gradle/
+**/build/
+local.properties
+*.apk
+*.log
+node_modules/
+.env
+.env.*
+!**/.env.example
+
+!downloads/SW-Android.apk

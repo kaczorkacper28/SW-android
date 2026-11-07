@@ -2,6 +2,8 @@ package pl.sw.android;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.os.Build;
+import android.view.WindowInsets;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -10,6 +12,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.widget.*;
 import java.io.*;
 import java.net.*;
@@ -19,7 +22,13 @@ import java.util.concurrent.*;
 import org.json.*;
 
 public class MainActivity extends Activity {
-    private static final String API = "https://sw-android.onrender.com";
+    private static final String PREFS = "sw_connection";
+    private static final String PREF_ADDRESS = "backend_address";
+    private static final String PREF_PASSWORD = "connection_password";
+    private SharedPreferences preferences;
+    private volatile ConnectionSettings connectionSettings;
+    private int screenGeneration;
+    private TextView homeConnectionStatus;
     private final ExecutorService ex = Executors.newSingleThreadExecutor();
     private LinearLayout root;
 
@@ -55,12 +64,24 @@ public class MainActivity extends Activity {
     @Override
     public void onCreate(Bundle b) {
         super.onCreate(b);
+        preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
+        try {
+            connectionSettings = new ConnectionSettings(
+                    preferences.getString(PREF_ADDRESS, ConnectionSettings.DEFAULT_BASE_URL),
+                    preferences.getString(PREF_PASSWORD, ""));
+        } catch (IllegalArgumentException error) {
+            connectionSettings = new ConnectionSettings(ConnectionSettings.DEFAULT_BASE_URL, "");
+            Toast.makeText(this, "Sprawdź zapisane ustawienia połączenia.", Toast.LENGTH_LONG).show();
+        }
         home();
     }
 
     private void frame(String title) {
+        screenGeneration++;
+        homeConnectionStatus = null;
         ScrollView sv = new ScrollView(this);
         sv.setFillViewport(true);
+        applyInsets(sv);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(10), dp(10), dp(10), dp(18));
@@ -82,7 +103,8 @@ public class MainActivity extends Activity {
         TextView v = text(s, 13, WHITE, true);
         v.setBackground(bg(color, 8));
         v.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(44));
+        v.setMinHeight(dp(44));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
         p.setMargins(0, dp(3), 0, dp(3));
         root.addView(v, p);
         return v;
@@ -127,17 +149,28 @@ public class MainActivity extends Activity {
     private void home() {
         frame("CENTRUM OPERACYJNE");
         bar("SŁUŻBA WIĘZIENNA • SYSTEM BLUEBIRD SW", GREEN);
-        bar("● Status połączenia: ONLINE", Color.rgb(20, 170, 75));
+        final int page = screenGeneration;
+        homeConnectionStatus = bar("Sprawdzanie połączenia z serwerem…", BLUE);
+        TextView connectionStatus = homeConnectionStatus;
+        connectionStatus.setOnClickListener(v -> checkConnection(connectionSettings, connectionStatus, page));
+        TextView connectionHint = text("Dotknij statusu, aby sprawdzić ponownie.", 11, Color.LTGRAY, false);
+        root.addView(connectionHint);
+        Button settings = new Button(this);
+        settings.setAllCaps(false);
+        settings.setText("USTAWIENIA POŁĄCZENIA");
+        settings.setOnClickListener(v -> connectionSettings());
+        root.addView(settings, new LinearLayout.LayoutParams(-1, dp(54)));
+        checkConnection(connectionSettings, connectionStatus, page);
         bar("Wybierz moduł operacyjny", PINK);
 
         Button officers = tile("FUNKCJONARIUSZE", "Pełna kadra SW", PANEL);
         Button commands = tile("ROZKAZY", "Kanały i wiadomości", PANEL);
         Button communication = tile("KOMUNIKATY", "Broadcaster SW", PANEL);
-        Button profile = tile("MÓJ PROFIL", "Dane funkcjonariusza", PANEL);
-        Button map = tile("MAPA", "Mapa jednostek", PANEL);
-        Button reports = tile("RAPORTY", "Raporty służbowe", PINK);
-        Button service = tile("SŁUŻBA", "Grafik i obsada", PANEL);
-        Button documents = tile("DOKUMENTY", "Dokumentacja SW", PANEL);
+        Button profile = tile("MÓJ PROFIL", "W przygotowaniu", PANEL);
+        Button map = tile("MAPA", "W przygotowaniu", PANEL);
+        Button reports = tile("RAPORTY", "W przygotowaniu", PINK);
+        Button service = tile("SŁUŻBA", "W przygotowaniu", PANEL);
+        Button documents = tile("DOKUMENTY", "W przygotowaniu", PANEL);
 
         row(root, officers, commands);
         row(root, communication, profile);
@@ -151,11 +184,11 @@ public class MainActivity extends Activity {
         officers.setOnClickListener(v -> officers());
         commands.setOnClickListener(v -> channels());
         communication.setOnClickListener(v -> broadcast());
-        profile.setOnClickListener(v -> simple("MÓJ PROFIL", "👤 PROFIL FUNKCJONARIUSZA\n\nDane są pobierane z systemu SW."));
-        map.setOnClickListener(v -> simple("MAPA", "🗺️ MAPA JEDNOSTEK\n\nModuł mapy jednostek SW."));
-        reports.setOnClickListener(v -> simple("RAPORTY", "📄 RAPORTY SŁUŻBOWE\n\n• rozpoczęcie służby\n• zakończenie służby\n• konwój\n• interwencja\n• zdarzenie"));
-        service.setOnClickListener(v -> simple("SŁUŻBA", "🕐 GRAFIK SŁUŻBY\n\nZmiany i aktualna obsada jednostki."));
-        documents.setOnClickListener(v -> simple("DOKUMENTY", "📁 DOKUMENTY SW\n\n• rozkazy\n• zarządzenia\n• procedury\n• regulaminy"));
+        profile.setOnClickListener(v -> simple("MÓJ PROFIL", "👤 PROFIL FUNKCJONARIUSZA\n\nTen moduł nie jest jeszcze podłączony do backendu."));
+        map.setOnClickListener(v -> simple("MAPA", "🗺️ MAPA JEDNOSTEK\n\nTen moduł nie jest jeszcze dostępny."));
+        reports.setOnClickListener(v -> simple("RAPORTY", "📄 RAPORTY SŁUŻBOWE\n\nTen moduł nie jest jeszcze podłączony do backendu."));
+        service.setOnClickListener(v -> simple("SŁUŻBA", "🕐 GRAFIK SŁUŻBY\n\nTen moduł nie jest jeszcze podłączony do backendu."));
+        documents.setOnClickListener(v -> simple("DOKUMENTY", "📁 DOKUMENTY SW\n\nTen moduł nie jest jeszcze podłączony do backendu."));
     }
 
     private void simple(String title, String content) {
@@ -216,13 +249,15 @@ public class MainActivity extends Activity {
 
     private void officers() {
         frame("FUNKCJONARIUSZE SW");
+        final int page = screenGeneration;
+        final ConnectionSettings connection = connectionSettings;
         bar("WYSZUKIWANIE KADRY SŁUŻBY WIĘZIENNEJ", GREEN);
         TextView status = bar("Pobieranie wszystkich funkcjonariuszy...", Color.rgb(25,145,75));
         back();
 
         ex.execute(() -> {
             try {
-                JSONObject response = getJson(API + "/api/officers");
+                JSONObject response = getJson(connection, "/api/officers");
                 JSONArray source = getOfficerArray(response);
                 if (source == null) throw new Exception("API nie zwróciło tablicy funkcjonariuszy.");
                 ArrayList<JSONObject> list = new ArrayList<>();
@@ -230,12 +265,12 @@ public class MainActivity extends Activity {
                     JSONObject m = source.optJSONObject(i);
                     if (m != null && !isCitizen(m)) list.add(m);
                 }
-                runOnUiThread(() -> {
+                showOnPage(page, () -> {
                     status.setText("KADRA SW • " + list.size() + " FUNKCJONARIUSZY");
                     for (JSONObject m : list) addOfficerCard(m);
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> status.setText("❌ BŁĄD POBIERANIA KADRY\n" + e.getMessage()));
+                showOnPage(page, () -> status.setText("❌ BŁĄD POBIERANIA KADRY\n" + connectionError(e)));
             }
         });
     }
@@ -285,25 +320,27 @@ public class MainActivity extends Activity {
 
     private void channels() {
         frame("KANAŁY SW");
+        final int page = screenGeneration;
+        final ConnectionSettings connection = connectionSettings;
         bar("📋 WYBIERZ KANAŁ DISCORD", GREEN);
         TextView status = bar("Pobieranie kanałów...", Color.rgb(25,145,75));
         back();
 
         ex.execute(() -> {
             try {
-                JSONArray channels = getJsonArray(API + "/api/discord/channels", "channels");
+                JSONArray channels = getJsonArray(connection, "/api/discord/channels", "channels");
                 ArrayList<JSONObject> list = new ArrayList<>();
                 for (int i = 0; i < channels.length(); i++) {
                     JSONObject c = channels.optJSONObject(i);
                     if (c != null) list.add(c);
                 }
-                runOnUiThread(() -> {
+                showOnPage(page, () -> {
                     status.setText("DOSTĘPNE KANAŁY • " + list.size());
                     int insertAt = Math.max(0, root.getChildCount() - 1);
                     for (JSONObject c : list) addChannelButton(c, insertAt++);
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> status.setText("❌ NIE UDAŁO SIĘ POBRAĆ KANAŁÓW\n" + e.getMessage()));
+                showOnPage(page, () -> status.setText("❌ NIE UDAŁO SIĘ POBRAĆ KANAŁÓW\n" + connectionError(e)));
             }
         });
     }
@@ -325,10 +362,14 @@ public class MainActivity extends Activity {
     }
 
     private void chat(String channelId, String channelName) {
+        final int pageId = ++screenGeneration;
+        homeConnectionStatus = null;
+        final ConnectionSettings connection = connectionSettings;
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setBackgroundColor(Color.rgb(0,0,0));
         page.setPadding(0, 0, 0, 0);
+        applyInsets(page);
         setContentView(page);
 
         LinearLayout header = new LinearLayout(this);
@@ -386,7 +427,7 @@ public class MainActivity extends Activity {
 
         backBtn.setOnClickListener(v -> channels());
 
-        Runnable load = () -> loadMessages(channelId, messages, messagesScroll);
+        Runnable load = () -> loadMessages(connection, channelId, messages, messagesScroll, pageId);
         load.run();
 
         send.setOnClickListener(v -> {
@@ -404,16 +445,16 @@ public class MainActivity extends Activity {
                     JSONObject body = new JSONObject();
                     body.put("channelId", channelId);
                     body.put("content", content);
-                    postJson(API + "/api/discord/messages", body);
-                    runOnUiThread(() -> {
+                    postJson(connection, "/api/discord/messages", body);
+                    showOnPage(pageId, () -> {
                         messageInput.setText("");
                         send.setEnabled(true);
-                        loadMessages(channelId, messages, messagesScroll);
+                        loadMessages(connection, channelId, messages, messagesScroll, pageId);
                     });
                 } catch (Exception e) {
-                    runOnUiThread(() -> {
+                    showOnPage(pageId, () -> {
                         send.setEnabled(true);
-                        Toast.makeText(this, "Nie udało się wysłać: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                        Toast.makeText(this, "Nie udało się wysłać: " + connectionError(e), Toast.LENGTH_LONG).show();
                     });
                 }
             });
@@ -423,11 +464,11 @@ public class MainActivity extends Activity {
         messageInput.requestFocus();
     }
 
-    private void loadMessages(String channelId, LinearLayout messages, ScrollView scroll) {
+    private void loadMessages(ConnectionSettings connection, String channelId, LinearLayout messages, ScrollView scroll, int page) {
         ex.execute(() -> {
             try {
-                JSONArray a = getJsonArray(API + "/api/discord/messages?channelId=" + URLEncoder.encode(channelId, "UTF-8") + "&limit=50", "messages");
-                runOnUiThread(() -> {
+                JSONArray a = getJsonArray(connection, "/api/discord/messages?channelId=" + URLEncoder.encode(channelId, "UTF-8") + "&limit=50", "messages");
+                showOnPage(page, () -> {
                     messages.removeAllViews();
                     ArrayList<JSONObject> ordered = new ArrayList<>();
                     for (int i = a.length() - 1; i >= 0; i--) {
@@ -438,9 +479,9 @@ public class MainActivity extends Activity {
                     messages.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> {
+                showOnPage(page, () -> {
                     messages.removeAllViews();
-                    TextView err = text("❌ Nie udało się pobrać wiadomości.\n\n" + e.getMessage(), 14, Color.LTGRAY, false);
+                    TextView err = text("❌ Nie udało się pobrać wiadomości.\n\n" + connectionError(e), 14, Color.LTGRAY, false);
                     err.setBackground(bg(Color.rgb(35,20,25), 10));
                     messages.addView(err);
                 });
@@ -470,6 +511,8 @@ public class MainActivity extends Activity {
 
     private void broadcast() {
         frame("KOMUNIKATY");
+        final int page = screenGeneration;
+        final ConnectionSettings connection = connectionSettings;
         bar("BROADCASTER SŁUŻBY WIĘZIENNEJ", GREEN);
         EditText title = input("Tytuł komunikatu");
         EditText message = input("Treść komunikatu");
@@ -504,16 +547,16 @@ public class MainActivity extends Activity {
                     body.put("title", t);
                     body.put("content", msg);
                     body.put("color", 3447003);
-                    postJson(API + "/api/broadcaster/send", body);
-                    runOnUiThread(() -> {
+                    postJson(connection, "/api/broadcaster/send", body);
+                    showOnPage(page, () -> {
                         result.setText("✅ Komunikat wysłany.");
                         send.setEnabled(true);
                         title.setText("");
                         message.setText("");
                     });
                 } catch (Exception e) {
-                    runOnUiThread(() -> {
-                        result.setText("❌ " + e.getMessage());
+                    showOnPage(page, () -> {
+                        result.setText("❌ " + connectionError(e));
                         send.setEnabled(true);
                     });
                 }
@@ -521,63 +564,175 @@ public class MainActivity extends Activity {
         });
     }
 
-    private JSONObject getJson(String url) throws Exception {
-        HttpURLConnection c = (HttpURLConnection)new URL(url).openConnection();
-        c.setRequestMethod("GET");
-        c.setConnectTimeout(15000);
-        c.setReadTimeout(25000);
-        c.setRequestProperty("Accept", "application/json");
-        return readJsonResponse(c);
+    private JSONObject getJson(ConnectionSettings connection, String route) throws Exception {
+        HttpURLConnection c = connection.open(route, "GET");
+        if (route.equals("/api/health") || route.equals("/api/access")) {
+            c.setConnectTimeout(5000);
+            c.setReadTimeout(5000);
+        }
+        try { return readJsonResponse(c); }
+        finally { c.disconnect(); }
     }
 
-    private JSONArray getJsonArray(String url, String key) throws Exception {
-        JSONObject o = getJson(url);
+    private JSONArray getJsonArray(ConnectionSettings connection, String route, String key) throws Exception {
+        JSONObject o = getJson(connection, route);
         JSONArray a = o.optJSONArray(key);
         if (a != null) return a;
         if (o.length() == 1) {
             Iterator<String> it = o.keys();
             if (it.hasNext()) {
-                Object v = o.opt(it.next());
-                if (v instanceof JSONArray) return (JSONArray)v;
+                Object value = o.opt(it.next());
+                if (value instanceof JSONArray) return (JSONArray)value;
             }
         }
-        throw new Exception("API nie zwróciło tablicy " + key + ".");
+        throw new Exception("Serwer nie zwrócił listy " + key + ".");
     }
 
-    private JSONObject postJson(String url, JSONObject body) throws Exception {
-        HttpURLConnection c = (HttpURLConnection)new URL(url).openConnection();
-        c.setRequestMethod("POST");
-        c.setConnectTimeout(15000);
-        c.setReadTimeout(25000);
+    private JSONObject postJson(ConnectionSettings connection, String route, JSONObject body) throws Exception {
+        HttpURLConnection c = connection.open(route, "POST");
         c.setDoOutput(true);
         c.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-        c.setRequestProperty("Accept", "application/json");
         byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
-        OutputStream out = c.getOutputStream();
-        out.write(bytes);
-        out.flush();
-        out.close();
-        return readJsonResponse(c);
+        c.setFixedLengthStreamingMode(bytes.length);
+        try {
+            try (OutputStream out = c.getOutputStream()) { out.write(bytes); }
+            return readJsonResponse(c);
+        } finally { c.disconnect(); }
     }
 
     private JSONObject readJsonResponse(HttpURLConnection c) throws Exception {
         int code = c.getResponseCode();
+        if (code >= 300 && code < 400) {
+            throw new Exception("Serwer przekierowuje żądanie. W ustawieniach wpisz końcowy adres backendu.");
+        }
         InputStream stream = code < 400 ? c.getInputStream() : c.getErrorStream();
-        if (stream == null) throw new Exception("HTTP " + code);
-        BufferedReader r = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
-        StringBuilder s = new StringBuilder();
-        String line;
-        while ((line = r.readLine()) != null) s.append(line);
-        r.close();
-        if (code < 200 || code >= 300) {
-            try {
-                JSONObject e = new JSONObject(s.toString());
-                throw new Exception(e.optString("message", "HTTP " + code));
-            } catch (JSONException ignored) {
-                throw new Exception("HTTP " + code + ": " + s);
+        if (stream == null) throw new Exception("Serwer zwrócił HTTP " + code + ".");
+        StringBuilder content = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            char[] buffer = new char[4096];
+            int count;
+            while ((count = reader.read(buffer)) != -1) {
+                if (content.length() + count > 4 * 1024 * 1024) throw new Exception("Odpowiedź serwera jest zbyt duża.");
+                content.append(buffer, 0, count);
             }
         }
-        return new JSONObject(s.toString());
+        if (code < 200 || code >= 300) {
+            String message = code == 401 ? "Nieprawidłowe hasło połączenia. Sprawdź ustawienia aplikacji." : "Serwer zwrócił HTTP " + code + ".";
+            try { message = new JSONObject(content.toString()).optString("message", message); }
+            catch (JSONException ignored) { }
+            throw new Exception(message);
+        }
+        try { return new JSONObject(content.toString()); }
+        catch (JSONException error) { throw new Exception("Serwer nie zwrócił poprawnej odpowiedzi JSON. Sprawdź adres backendu."); }
+    }
+
+    private String connectionError(Exception error) {
+        if (error instanceof java.net.SocketTimeoutException) return "Serwer nie odpowiedział na czas. Sprawdź, czy backend działa w Termuxie.";
+        if (error instanceof java.net.ConnectException) return "Nie można połączyć się z serwerem. Uruchom backend w Termuxie i sprawdź adres.";
+        if (error instanceof java.net.UnknownHostException) return "Nie znaleziono adresu serwera. Sprawdź adres i połączenie z internetem.";
+        if (error instanceof javax.net.ssl.SSLException) return "Nie można potwierdzić bezpiecznego połączenia HTTPS. Sprawdź certyfikat serwera.";
+        return error.getMessage() == null ? "Nie udało się połączyć z serwerem." : error.getMessage();
+    }
+
+    private void applyInsets(View view) {
+        view.setOnApplyWindowInsetsListener((target, insets) -> {
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets system = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
+                target.setPadding(system.left, system.top, system.right, system.bottom);
+            } else {
+                target.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
+                        insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            }
+            return insets;
+        });
+    }
+
+    private void showOnPage(int page, Runnable action) {
+        runOnUiThread(() -> {
+            if (!isFinishing() && !isDestroyed() && page == screenGeneration) action.run();
+        });
+    }
+
+    private void checkConnection(ConnectionSettings connection, TextView status, int page) {
+        if (!status.isEnabled()) return;
+        status.setEnabled(false);
+        status.setText("Sprawdzanie połączenia z serwerem…");
+        status.setBackground(bg(BLUE, 8));
+        ex.execute(() -> {
+            boolean reachable = false;
+            try {
+                JSONObject health = getJson(connection, "/api/health");
+                if (!health.optString("status").equals("ok")) throw new Exception("Serwer zgłosił błąd działania.");
+                reachable = true;
+                if (connection.accessKey.isEmpty()) throw new Exception("Wpisz hasło połączenia w ustawieniach aplikacji.");
+                JSONObject access = getJson(connection, "/api/access");
+                if (!access.optBoolean("authenticated", false)) throw new Exception("Serwer nie potwierdził dostępu.");
+                String discord = health.optBoolean("discordTokenConfigured", false)
+                        ? "Discord: skonfigurowany" : "Discord: uzupełnij konfigurację w Termuxie";
+                showOnPage(page, () -> {
+                    status.setText("Serwer: połączono • " + discord);
+                    status.setBackground(bg(health.optBoolean("discordTokenConfigured", false) ? GREEN : BLUE, 8));
+                    status.setEnabled(true);
+                });
+            } catch (Exception error) {
+                String message = (reachable ? "Serwer dostępny • " : "Brak połączenia • ") + connectionError(error);
+                showOnPage(page, () -> {
+                    status.setText(message);
+                    status.setBackground(bg(Color.rgb(155, 60, 65), 8));
+                    status.setEnabled(true);
+                });
+            }
+        });
+    }
+
+    private void connectionSettings() {
+        frame("USTAWIENIA POŁĄCZENIA");
+        final int page = screenGeneration;
+        bar("BACKEND W TERMUXIE", GREEN);
+        TextView help = text("Uruchom backend w Termuxie na tym samym telefonie. Wpisz hasło połączenia ustawione w konfiguratorze. Token Discord pozostaje wyłącznie w Termuxie.", 14, WHITE, false);
+        root.addView(help);
+        root.addView(text("Adres backendu", 13, WHITE, true));
+        EditText address = input("http://127.0.0.1:3000");
+        address.setSingleLine(true);
+        address.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        address.setText(connectionSettings.baseUrl);
+        root.addView(address, new LinearLayout.LayoutParams(-1, dp(60)));
+        root.addView(text("Hasło połączenia", 13, WHITE, true));
+        EditText password = input("Hasło z konfiguratora w Termuxie");
+        password.setSingleLine(true);
+        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        password.setText(connectionSettings.accessKey);
+        root.addView(password, new LinearLayout.LayoutParams(-1, dp(60)));
+        TextView note = text("Domyślny adres działa lokalnie na tym telefonie. Zewnętrzny serwer wymaga HTTPS. Wpisz sam adres, bez /api.", 12, Color.LTGRAY, false);
+        root.addView(note);
+        TextView result = bar("Ustawienia zostaną zapamiętane na tym urządzeniu.", BLUE);
+        Button test = new Button(this);
+        test.setAllCaps(false);
+        test.setText("SPRAWDŹ POŁĄCZENIE");
+        root.addView(test, new LinearLayout.LayoutParams(-1, dp(54)));
+        test.setOnClickListener(v -> {
+            try { checkConnection(new ConnectionSettings(address.getText().toString(), password.getText().toString()), result, page); }
+            catch (IllegalArgumentException error) { result.setText(error.getMessage()); }
+        });
+        Button save = new Button(this);
+        save.setAllCaps(false);
+        save.setText("ZAPISZ USTAWIENIA");
+        root.addView(save, new LinearLayout.LayoutParams(-1, dp(54)));
+        save.setOnClickListener(v -> {
+            try {
+                ConnectionSettings next = new ConnectionSettings(address.getText().toString(), password.getText().toString());
+                preferences.edit().putString(PREF_ADDRESS, next.baseUrl).putString(PREF_PASSWORD, next.accessKey).apply();
+                connectionSettings = next;
+                home();
+            } catch (IllegalArgumentException error) { result.setText(error.getMessage()); }
+        });
+        back();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (homeConnectionStatus != null) checkConnection(connectionSettings, homeConnectionStatus, screenGeneration);
     }
 
     @Override
